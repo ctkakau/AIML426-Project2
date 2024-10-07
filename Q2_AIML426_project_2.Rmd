@@ -42,13 +42,14 @@ ec_methods = [devo, pso]
 benches = ['f1', 'f2']
 dim_sizes = [20, 50]
 ec_names = [meth.__name__ for meth in ec_methods]
+ec_nm = ['DE', 'PSO']
 ```
 
 
 ```{python createMultiRun}
 # do 30 runs for each f1(Rosenbrock) and f2(griewank) at D = 20, and at D = 50, using DE and PSO - with NGEN = 30
 # function for multiple runs
-def multirun(ECM, funcs, dims, runs):
+def multirun(ECM, ecm, funcs, dims, runs):
   multirun_results= pd.DataFrame(columns = ['Method', 'Benchmark', 'Dimensions', 'Run', 'HallOfFame'],)
   
   for e, meth in enumerate(ECM):
@@ -58,14 +59,14 @@ def multirun(ECM, funcs, dims, runs):
           pop, logbook, hof = meth.main( MU = MU, NGEN = NGEN, NDIM = D, BENCH = func, SEED = e+r+f+d, )
           
           best_fit = [item for (item) in hof[0].fitness.values][0]
-          multirun_results = multirun_results._append({'Method' : meth.__name__, 'Benchmark': func, 'Dimensions': D, 'Run': r, 'HallOfFame': hof, 'BestFitness':  best_fit}, ignore_index=True)
+          multirun_results = multirun_results._append({'Method' : meth.__name__, 'method' : ecm[e], 'Benchmark': func, 'Dimensions': D, 'Run': r, 'HallOfFame': hof, 'BestFitness':  best_fit}, ignore_index=True)
     
   return(multirun_results)
 ```
 
 
 ```{python runExp}
-py_res = multirun(ECM = ec_methods, funcs = benches, dims = dim_sizes, runs = 30)
+py_res = multirun(ECM = ec_methods, ecm = ec_nm, funcs = benches, dims = dim_sizes, runs = 30)
 ```
 
 ```{r holdingNames}
@@ -325,8 +326,8 @@ The results show that the objective function has a massive effect on the perform
 
 ```{r q1hTable}
 res_h <- res_table %>% 
-  select(Method, Dimensions, Benchmark, BestFitness) %>%
-  group_by(Dimensions, Benchmark, Method, ) %>%
+  select(method, Dimensions, Benchmark, BestFitness) %>%
+  group_by(Dimensions, Benchmark, method, ) %>%
   summarise(average_ = mean(BestFitness),
             std_dev = sd(BestFitness),
             .groups = 'keep')  %>%
