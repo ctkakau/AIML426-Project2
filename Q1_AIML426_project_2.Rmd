@@ -1,0 +1,306 @@
+---
+title: "Q1_AIML426_project2"
+author: "Chad Kakau 300212228"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE, warning = FALSE}
+knitr::opts_chunk$set(include = FALSE, echo = TRUE, message = FALSE, warning = FALSE, results = TRUE)
+library(reticulate)
+library(dplyr)
+library(knitr)
+py_install('pandas')
+```
+
+```{python importCommonModules}
+#import all the modules used in this document
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import random
+import operator
+```
+
+```{python importScripts}
+# import the scripts used in this document
+import EvoStrategy as es
+import EvoProgramme as epr
+```
+
+```{python preliminaryActions}
+
+# algorithm constant parameters
+minval = -30 # x \in [-30, 30]: project definition
+maxval = 30
+# set defaults:  minstrat, maxstrat, c,
+ngen = 100
+mu = 20
+lam = 20 
+
+# create lists for iteration reference
+ec_methods = [es, epr]
+benches = ['f1', 'f2']
+dim_sizes = [20, 50]
+```
+
+
+```{python createMultiRun}
+# do 30 runs for each f1(Rosenbrock) and f2(griewank) at D = 20, and at D = 50, using ES and EP - with NGEN = 30
+# function for multiple runs
+def multirun(ECM, funcs, dims, runs):
+  multirun_results= pd.DataFrame(columns = ['Method', 'Benchmark', 'Dimensions', 'Run', 'Population', 'Logbook', 'HallOfFame'],)
+  for e, meth in enumerate(ECM):
+    for f, func in enumerate(funcs):
+      for d, D in enumerate(dims):
+        for r in range(runs):
+          
+          pop, logbook, hof = meth.main(IND_SIZE = D, MIN_VALUE = minval, MAX_VALUE = maxval,  NGEN = ngen, MU = mu, LAMBDA = lam, SEED = e+r+f+d, BENCH = func )
+          best_fit = [item for (item) in hof[0].fitness.values][0]
+          multirun_results = multirun_results._append({'Method' : meth.__name__, 'Benchmark': func, 'Dimensions': D, 'Run': r, 'Population': pop, 'Logbook': logbook, 'HallOfFame': hof, 'BestFitness':  best_fit}, ignore_index=True)
+    
+  return(multirun_results)
+
+```
+
+
+```{python runExp}
+q1_res = multirun(ECM = ec_methods, funcs = benches, dims = dim_sizes, runs = 30)
+```
+
+```{r q1ResultsTable, warning=FALSE}
+q1_table <- py$q1_res
+q1_table <- subset(q1_table, select = -c(Population, Logbook, HallOfFame))
+q1_stats <- q1_table %>% group_by(Method, Benchmark, Dimensions,) %>% summarise(average_ = mean(BestFitness), std_dev = sd(BestFitness))
+```
+
+
+
+# Evolution programming and evolution strategy
+
+Use both evolutionary programming (EP) and evolution strategy (ES) to search for the minimum of the following functions, where $D$ is the number of variables, ie. $x_1, x_2, ..., x_D$.  Choose any specific algorithmic variations of EP and ES, support with justification.
+
+1. Rosenbrock's function:  
+
+$$
+f_1 (x) = \sum^{D-1}_{i=1} (100(x^2_i - x_{i+1} )^2 + (x_i -1)^2), x_i \in [-30, 30]
+$$
+
+2. Griewank's function:
+
+$$
+f_2(x) = \sum^D_{i=1}\frac{x_i^2}{4000}-\prod^D_{i=1}cos(\frac{x_i}{\sqrt{i}})+ 1, x_i \in [-30, 30]
+$$
+
+## Method Description  
+
+I developed and evolutionary strategy and an evolutionary programme to solve the two functions 
+$f_1, f_2$, which both have different characteristics.  Both functions have multiple local optima, so are unlikely to resolve to a single scalar value, rather optimised solutions will resolve to $n-$ dimensional vectors or arrays of reasonable $x$ values.  Both objective functions are built into the deap framework as benchmarks, and these built-in benchmarks will be used as cost functions.  This section describes the methods used and is divided into two main sections reflecting the two approaches:  Evolutionary strategy ad Evolutionary programming.  But we will first describe the parameters common to both methods before briefly describing the different approaches and their specific parameters.
+
+### Common parameter settings
+
+Common parameters, as described in the problem definition:
+
+$gen= 30$ - number of generations  
+$dim \in [20, 50]$ - number of dimensions  
+objective functions, defined by either $f1$ and $f2$  
+
+Common parameters, as selected:
+
+$\mu = 60$ - number of parents  
+$\lambda = 60$ - number of offspring  
+
+Both selected to keep the population fairly small.  Note that in the lecture example, fairly good results were achieved with $\mu = 10, \lambda = 20$ but this was over the course of 100 generations.  I chose to increase the population size to provide greater variation over a shorter, 30-generation, evolutionary cycle.
+
+
+### Fast Evolutionary Programming  
+
+__Evolutionary programming:__  In this implementation I used the Fast-Evolutionary Programming (FEP) algorithm.  This algorithm focusses on exploration by incorporating random noise into the mutation step. Actually, this took SOOOoo long to implement my mutation function and I'm still not even sure how it managed to work... after hours of testing, I think it finally worked when I added  comma after returning the individual.  Anyway, I chose FEP because the mutation function looked straight-forward but I didn't think it would perform very well because of the random noise introduced at each mutation.
+
+#### overall process:  
+
+
+- Select non-negative EP parameters $\epsilon$ and $c$ . Nominally $\epsilon << 1$ and $c = 1$
+- $\{x_{i}\} \leftarrow$ {randomly generated population}, $i \in [1, N]$
+- $\{v_{i}\} \leftarrow$ {randomly generated variances}, $i \in [1, N]$
+- While not(termination criteria)
+  - Calculate the cost $f(x_i)$ of each individual in the population
+  - For each individual $x_i, i \in [1, N]$:
+  - Perform mutation:
+    - Generate random vectors $r_{xi}$ and $r_{vi}$ with each element $\sim Cauchy(0, 1)$
+    - $x_i^\prime \leftarrow x_i + r_{xi}\sqrt{v_i}$
+    - $v_i^\prime \leftarrow v_i + r_{vi}\sqrt{cv_i}$
+    - $v_i^\prime \leftarrow \max(v_i, \epsilon)$
+  - Next individual
+  - $\{x_i\} \leftarrow$ best $N$ individuals from $\{x_i, x_i^\prime\}$
+  - $\{v_i\} \leftarrow$ variances that correspond to $\{x_i\}$
+- Next generation
+
+
+#### FEP-specific parameters:   
+
+
+In this implementation, I used the following FEP-specific parameters:  
+
+$p(\text{mate}) = 0$ - probability of performing recombination  
+$p(\text{mutate}) = 1$ - probability of performing mutation  
+Recombination method:  (not performed)  
+Mutation method:  defined function as described in FEP process above  
+Selection:  Best  
+$\mu, \lambda$ algorithm  
+
+The key parameters were the probabilities preventing recombination and ensuring mutation as the only method for evolving individuals.  The defined function took a little while to implement and required the inclusion of a 'variance' attribute for each individual.  
+
+### Evolutionary Strategy  
+
+
+__Evolutionary strategy:__  In this implementation I used the $(\mu,\lambda)$ -ES and $(\mu + \lambda)$ -ES implementations.  The $(\mu, \lambda)$ algorithm performs better than the $\mu + \lambda$ algorithm for noisy problems.  While the $f_1$ Rosenbrock problem has numerous local optima, that tend to be more localised (i.e. connected), the $f_2$ Griewank function is more noisy, with numerous, disjointed local optima.
+
+#### overall process:  
+
+
+- Initialise constants $\tau$ and $\tau^\prime$:
+- $\tau = (\sqrt{2 \sqrt{n}})^{-1}$
+- $\tau^\prime = (\sqrt{2 n})^{-1}$
+- $\{(x_, , \sigma_k)\}, k\in[1, \mu] \leftarrow$ randomly generate individuals with:
+  - each $x_k$ a candidate solution and
+  - each $\sigma_k$ a standard deviation vector
+- While not(termination criterion)
+  - For $k= 1, ..., \lambda$
+    - Randomly select two parents from $\{(x_k, \sigma_k)\}$
+    - Perform recombination to generate child $\{(x^\prime_k, \sigma^\prime_k)\}$
+    - Generate a random scalar $\rho_0 \sim N(0, 1)$
+    - Generate a random vector $[\rho_1, ..., \rho_n] \sim N(0, 1)$
+    - Update:
+    - $\sigma^\prime_{ki} \leftarrow \sigma^\prime_{ki} \exp(\tau^\prime \rho_0 + \tau \rho_i)$ for $i \in [1, n]$
+    - $\Sigma^\prime_k \leftarrow \text{diag}((\sigma^\prime_{ki})^2, ..., \sigma^\prime_{ki})^n) \in R^{n \times n}$
+    - Generate a random vector $r \sim N(0, \Sigma^\prime_k)$
+    - Update:
+    - $x^\prime_k \leftarrow x^\prime_k + r$
+    - Next $k$
+  - End For
+  - If $(\mu + \lambda):$
+    - $\{(x_k, \sigma_k)\} \leftarrow$ best $\mu$ individuals from $\{(x_k, \sigma_k)\} \cup \{(x^\prime_k,   \sigma^\prime_k)\}$
+  - Else if $(\mu, \lambda):$
+    - $\{(x_k, \sigma_k)\} \leftarrow$ best $\mu$ individuals from $\{(x^\prime_k, \sigma^\prime_k)\}$
+  - End if
+- Next generation
+
+
+#### $(\mu , \lambda)$ -ES specific parameters:  
+
+The specific parameters for this implementation were:  
+
+$\min_{strategy} = 0.5$ - minimum strategy value  
+$\max_{strategy} = 2.0$ - maximum strategy value  
+$p(\text{mate}) = 0.6$ - probability of performing recombination  
+$p(\text{mutate}) = 0.4$ - probability of performing mutation  
+Recombination method: ESBlend  
+Mutation method:  MutESLogNormal  
+Selection method:  Tournament  
+$\mu + \lambda$ or $\mu, \lambda$ as depending on objective function.  
+
+The strategy values were almost randomly selected, especially the maximum, since it wasn't actually implemented anywhere, but it was in the source code, so I kept it.  I selected the minimum strategy value simply to stay between 0:1.  The probabilities for recombination and mutation were selected to ensure that both evolutionary operations were included (contrast with FEP later).  The recombination and mutation methods were selected because they were ready-made, ES-specific functions.
+
+## Results  
+
+I generated populations of size $N=60$ and evolved for 30 generations across each Evolutionary Strategy and Evolutionary programme, trying to optimise for $f1$ and $f2$ with $D=[20, 50]$ .  
+
+#### FEP vs $\mathbf{(\mu, \lambda)}:$  
+
+```{r q1cTable}
+res_1c <- q1_table %>% select(Method, Benchmark, BestFitness) %>%
+  group_by(Method, Benchmark) %>%
+  summarise(average_ = mean(BestFitness),
+            std_dev = sd(BestFitness),
+            .groups = 'keep')  %>%
+  mutate(across(where(is.numeric), round, 3))
+res_1c <- kable(t(res_1c), 
+      caption = 'Performance between EP and ES methods, sumarised by objective functions, averaged across all runs')
+```
+
+Comparing the two algorithms we see much better performance for both the EP and ES methods in optimising $f_1$ , with average fitnesses under 3.  For both methods, average fitness is horrendous when trying to optimise $f_1$ with values of $1.1e+06$ for $(\mu , \lambda)$ -ES and $3.3e+08$ for FEP.  
+
+`r res_1c`
+
+#### FEP performance by  objective functions for dimensions:  
+
+```{r q1dTable}
+res_1d <- q1_table %>% filter(Method == 'EvoProgramme') %>%
+  select(Benchmark, Dimensions, BestFitness) %>%
+  group_by(Benchmark, Dimensions) %>%
+  summarise(average_ = mean(BestFitness),
+            std_dev = sd(BestFitness),
+            .groups = 'keep')  %>%
+  mutate(across(where(is.numeric), round, 3))  
+res_1d <- kable(t(res_1d),
+      caption = 'FEP for dimensions D=20 and D=50, summarised by objective function and averaged across 30 runs each')
+```
+
+Performance of FEP against $f_1$ is horrendous at both dimension levels, with averages of 1.3e+08 at $D=20$ and 5.3e+08 at $D=50$ . Performance was better against $f_2$ with average fitness at $1.9$ when $D=20$ and $3.9$ when $D=50$ .  Presumably, performance decreases as the number of dimensions increases because each dimension introduces another element of variation and increases overall complexity of the solution.  
+
+`r res_1d`
+
+#### $\mathbf{(\mu, \lambda)}$ -ES performance by objective functions for different dimensions
+
+```{r q1eTable}
+res_1e <- q1_table %>% filter(Method == 'EvoStrategy') %>%
+  select(Benchmark, Dimensions, BestFitness) %>%
+  group_by(Benchmark, Dimensions) %>%
+  summarise(average_ = mean(BestFitness),
+            std_dev = sd(BestFitness),
+            .groups = 'keep')  %>%
+  mutate(across(where(is.numeric), round, 3))
+res_1e <- kable(t(res_1e),
+                caption = 'MuCommaLambda - ES for dimensions D=20 and D=50, summarised by objective function and  averaged across 30 runs each')
+```
+
+The performance of $(\mu, \lambda)$ -ES against $f_1$ was better at $D=20$ , with average fitness at $0.7$ compared to average fitness of $1.1$ at $D=50$ , however the standard deviation of the $D=50$ group is much lower than that of the $D=20$ , indicating a less diverse population at higher dimensions.
+
+The performance against $f_2$ was terrible overall, but was better at lower dimensionality, with average fitness of $3.2e+04$ at $D=20$ and a much higher $2.2e+06$ at $D=50$ . Deviation was proportionally higher for the $D=20$ set, around the same level as the average fitness, compared to standard deviation of around $75$ % of the average for the $D=50$ group.
+
+`r res_1e`
+
+#### FEP performance by dimensionality for each objective function
+
+```{r q1fTable}
+res_1f <- q1_table %>% filter(Method == 'EvoProgramme') %>%
+  select(Dimensions, Benchmark, BestFitness) %>%
+  group_by(Dimensions, Benchmark, ) %>%
+  summarise(average_ = mean(BestFitness),
+            std_dev = sd(BestFitness),
+            .groups = 'keep')  %>%
+  mutate(across(where(is.numeric), round, 3))  
+res_1f <- kable(t(res_1f),
+                caption ='Comparing EP performance against objective functions (f1, f2) for D=20 and D=50,  averaged across 30 runs each')
+```
+
+At $D=20$ , FEP performed terribly against $f_1$ but performed reasonably well against $f_2$ .  A similar pattern emerges at $D=50$ and with horrendous performance against $f_1$ and reasonable performance against $f_2$ .  
+
+`r res_1f`
+
+#### $\mathbf{(\mu, \lambda)}$ -ES performance by dimensionality for each objective function  
+
+```{r q1gTable}
+res_1g <- q1_table %>% filter(Method == 'EvoStrategy') %>%
+  select(Dimensions, Benchmark, BestFitness) %>%
+  group_by(Dimensions, Benchmark, ) %>%
+  summarise(average_ = mean(BestFitness),
+            std_dev = sd(BestFitness),
+            .groups = 'keep')  %>%
+  mutate(across(where(is.numeric), round, 3))  
+res_1g <- kable(t(res_1g),
+                caption = 'Comparing ES performance against objective functions (f1, f2) for D=20 and D=50,  averaged across 30 runs each')
+```
+
+At $D=20$, $(\mu, \lambda)$ -ES performed much worse against the $f_1$ objective than the $f_2$ objective.  Again, a similar pattern at $D=50$ with terrible performance against $f_1$ and reasonable performance against $f_2$
+
+`r res_1g`
+
+## Discussion  
+
+While there appears to be some effect of dimensionality, there seems to be a much stronger effect based on the objective function.  This is presumably down to the nature of the objective functions which are both complex, but are structurally quite different - where $f_1$ effectively sums differences between parent and chid, $f_2$ contains both sum and product functions over only the current solution.  
+
+The FEP approach introduces noise to every individual, taking a more exploratory focus, which could be more suited to objective functions that have disparate local minima (like the Griewank function).  FEP may be less suited to objective functions that require (at least at some stage) a more exploitative focus, where many minima are localised rather than dispersed (as in the Rosenbrock function). 
+
+

@@ -1,0 +1,347 @@
+---
+title: "Q2_AIML426_project2"
+author: "Chad Kakau 300212228"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE, warning = FALSE}
+rm(list = ls())
+
+knitr::opts_chunk$set(include = FALSE, echo = TRUE, message = FALSE, warning = FALSE, results = TRUE)
+library(reticulate)
+library(dplyr)
+library(knitr)
+py_install('pandas')
+```
+
+```{python importCommonModules}
+#import all the modules used in this document
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import random
+import operator
+```
+
+```{python importScripts}
+# import the scripts used in this document
+import DifferentialEvolution as devo
+import ParticleSwarmOptimisation as pso
+```
+
+```{python preliminaryActions}
+# params
+MU = 60
+NGEN = 30
+# NDIM = 3
+# BENCH = 'f1'
+
+# create lists for iteration reference
+ec_methods = [devo, pso]
+benches = ['f1', 'f2']
+dim_sizes = [20, 50]
+ec_names = [meth.__name__ for meth in ec_methods]
+```
+
+
+```{python createMultiRun}
+# do 30 runs for each f1(Rosenbrock) and f2(griewank) at D = 20, and at D = 50, using DE and PSO - with NGEN = 30
+# function for multiple runs
+def multirun(ECM, funcs, dims, runs):
+  multirun_results= pd.DataFrame(columns = ['Method', 'Benchmark', 'Dimensions', 'Run', 'HallOfFame'],)
+  
+  for e, meth in enumerate(ECM):
+    for f, func in enumerate(funcs):
+      for d, D in enumerate(dims):
+        for r in range(runs):
+          pop, logbook, hof = meth.main( MU = MU, NGEN = NGEN, NDIM = D, BENCH = func, SEED = e+r+f+d, )
+          
+          best_fit = [item for (item) in hof[0].fitness.values][0]
+          multirun_results = multirun_results._append({'Method' : meth.__name__, 'Benchmark': func, 'Dimensions': D, 'Run': r, 'HallOfFame': hof, 'BestFitness':  best_fit}, ignore_index=True)
+    
+  return(multirun_results)
+```
+
+
+```{python runExp}
+py_res = multirun(ECM = ec_methods, funcs = benches, dims = dim_sizes, runs = 30)
+```
+
+```{r holdingNames}
+meths <- c('Differential Evolution', 'Particle Swarm Optimisation')
+meth <- c('DE', 'PSO')
+funcs_ <- c('Rosenbrock', 'Griewank')
+```
+
+
+```{r q1ResultsTable, warning=FALSE}
+res_table <- py$py_res
+# res_table <- subset(res_table, select = -c(Population, Logbook, HallOfFame))
+q1_stats <- res_table %>% group_by(Method, Benchmark, Dimensions,) %>% summarise(average_ = mean(BestFitness), std_dev = sd(BestFitness))
+```
+
+
+# `r meths[1]` and `r meths[2]`
+
+Use both  `r meths[1]` ( `r meth[1]` ) and `r meths[2]` ( `r meth[2]` )to search for the minimum of the following functions, where $D$ is the number of variables, ie. $x_1, x_2, ..., x_D$.  Choose any specific algorithmic variations of `r meth[1]` and `r meth[2]` , support with justification.
+
+1. Rosenbrock's function:  
+
+$$
+f_1 (x) = \sum^{D-1}_{i=1} (100(x^2_i - x_{i+1} )^2 + (x_i -1)^2), x_i \in [-30, 30]
+$$
+
+2. Griewank's function:
+
+$$
+f_2(x) = \sum^D_{i=1}\frac{x_i^2}{4000}-\prod^D_{i=1}cos(\frac{x_i}{\sqrt{i}})+ 1, x_i \in [-30, 30]
+$$
+
+## Method Description  
+
+I made slight modifications to deap example scripts to implement `r meths[1]` and `r meths[2]` to solve the two functions $f_1:$ `r funcs_[1]` function and $f_2:$ `r funcs_[2]` function.  Both functions have multiple local optima, so are unlikely to resolve to a single scalar value.  Rather optimised solutions will resolve to $n-$ dimensional vectors or arrays of reasonable $x$ values.  In particular, $f1$ has an optimal surface with many possible solutions located close together and along a 'curving valley'.  $f2$ has multiple optima, which have much clearer local bounds.
+
+Both objective functions are built into the deap framework as benchmarks, and these built-in benchmarks will be used as cost functions.  
+
+This section describes the methods used and is divided into two main sections reflecting the two approaches: `r meths[1]` and `r meths[2]` .  But we will first describe the parameters common to both methods before briefly describing the different approaches and their specific parameters.
+
+### Common parameter settings
+
+Common parameters, as described in the problem definition:  
+
+$gen= 30$ - number of generations  
+$dim \in [20, 50]$ - number of dimensions  
+objective functions, defined by either $f1$ : `r funcs_[1]` function and $f2$ : `r funcs_[2]` function.   
+
+Common parameters, as selected:
+
+$\mu = 60$ - population size
+
+Parameter selected to keep the population fairly small.  This population size should be sufficient to provide reasonable variation over a short, 30-generation, evolutionary cycle.
+
+
+### `r meths[1]`  
+
+In this implementation I used the Basic `r meths[1]` ( `r meth[1]` ) algorithm.  
+
+This method generates a population of size $\lambda$ individuals, each with $dim =D$ , randomly generated, dimensions.  The method differs from many other EC algorithms by first performing mutation on each individual before performing any recombination operations.  
+
+Mutation involves comparing the selected individual $(X^G_{r1})$ with two other randomly selected $(X^G_{r2}, X^G_{r3})$ individuals, whose relative positions are measured and scaled to generate a new position for the initially selected individual $(V^G_i)$.  
+
+Recombination involves generating a random individual $(U_{ij})$ and for each dimension $j \in [1, D]$ , exchanging dimensions between the mutated $V^G_{ij}$ and generated $U^G_{ij}$ with specified probability $CR =0.25$ .
+
+#### overall process:  
+
+- __Generate__ population of size= NP individuals with $D$ variables
+- $X^0_{ij} = X^{min}_j + \text{rand}(0, 1\times(X^{max}_j - X^{min}_j)$
+with $i \in[NP], j \in[1, D]$
+- __while not termination__
+- __for__ $i=1:NP$
+  - __generate__ three random indices, $r1 \ne r2 \ne r3$
+  - __mutation__
+    - $V^G_i =X^G_{r1} + F(X^G_{r2}-X^G_{r3})$
+  - __end mutation__
+  - __crossover__
+    - $j_{rand}=\text{rand.int}(1, D)$
+    - __for__ $j=1:D$
+    - __if__ $\text{rand}(0, 1) \ge CR | j == j_{rand}$
+      - $U^G_{if} = V^G_{ij}$
+    - __else__
+      - $U^G_{if} = X^G_{ij}$
+    -  __end if__
+    - __end for__
+  - __end crossover__
+  - __selection__
+    - __if__ $f(U^G_i) \le f(X^G_i)$
+    - $X^{G+1}_i = U^G_i$
+    - __else__
+    - $X^{G+1}_i = X^G_i$
+    - __end if__
+  - __end selection__
+- __end for__
+- __end while__
+
+
+#### `r meths[1]` -specific parameters:   
+
+
+I used the following `r meth[1]` -specific parameters:  
+
+$CR=0.25:$  probability of conducting crossover on specific dimension
+$F=1:$ factor for scaling relative positions between $X^G_{r2}$ and $X^G_{r3}$ 
+Mutation method:  defined function as described above (change $X^G_{r1}$ dimensions by scaled difference between$X^G_{r2}$ and $X^G_{r3}$)
+Recombination method:  Uniform
+Selection:  Random  
+
+The key parameters were probability of crossover, $CR=0.25$ and scaling factor $F=1$ with both selected, because they were the default values in the example.  After trying a couple of other values, these seemed as good as any, considering the difference in the objective functions.
+
+### `r meths[2]`  
+
+
+In this implementation I used the `r meths[2]` method which mimics swarms of particles (individuals) that move through the search space to find best solutions.  Each particle remembers the best position it has been to (pbest) and knows the best position experienced by the swarm.  
+
+Each particle has a current position $X_i $ and velocity $V_i$ .  Particles are evaluated and if their fitness is better than the global best $P_{gd}$ , then the global best is updated, if the fitness is better than their previous pbest $P_{id}$ , their pbest is updated.  A particle's new position, $x_{id}(t+1)$, and velocity $v_{id}(t+1)$ are updated base on their current position $x_{id}(t)$ and distance from the global best and pbest.  
+
+A particle's velocity is influenced not only by knowing it's own best position, but also having access to the global best position, a result of swarm intelligence.  So when the partile is far from it's pbest it will have a higher personal or cognitive acceleration coefficient $\phi_1$ and when it's far from the global best it will have a higher social acceleration coefficient $phi_1$ .
+
+#### overall process:  
+
+- __Initiate__ the swarm (population) of N individuals:
+- $X_i = [X_{i1},X_{i2},...,X_{iD}]$ with velocity:
+- $V_i = [_{i1},V_{i2},...,V_{iD}]$
+- __While not termination__
+  - __Evaluate__ fitness of each particle
+  - __if__ $X_i$ fitness < pbest:
+    - __update__ $X_i$ pbest
+  - __end if__
+  - __if__ any pbest < gbest:
+    - __update__ gbest
+  - __end if__
+  - __Update__ velocity of each particle
+    - $v_{id}(t+1) = v_{id}(t) + \phi_1 \cdot r_1 \cdot (P_{id} - x_{id}(t) + \phi_2 \cdot r_2 \cdot (P_{gd} -x_{id}(t))$
+  - __Update__ postion of each particle
+    - $x_{id}(t+1)=x_{id}(t) + v_{id}(t+1)$
+- __end While__
+
+
+#### `r meths[2]` specific parameters:  
+
+The specific parameters for this implementation were:  
+
+$\min_{particle} = -6$ - minimum particle value  
+$\max_{particle} = 6$ - maximum particle value  
+$\min_{velocity} = -3$ - minimum velocity value  
+$\max_{velocity} = 3$ - maximum velocity value  
+$\phi_1 = 2.8$ - cognitive/individual acceleration coefficient  
+$\phi_2 = 0.5$ - social acceleration coefficient
+Update method:  position changes resulting from weighted velocity updates based on distance from personal and global best positions
+
+I left most parameters as they were in the default example, but because the two objective functions are multi-modal I changed the acceleration coefficients so that particles would focus more on achieving local optima, by making the cognitive acceleration coefficient $\phi_1 = 2.8$ higher than the social acceleration coefficient $\phi_2= 0.5$
+
+## Results  
+
+I generated populations of size $N=60$ and evolved for 30 generations across each Differential Evolution and Particle Swarm Optimisation method, trying to optimise for $f1$ and $f2$ with $D=[20, 50]$ .  
+
+#### `r meths[1]` and `r meths[2]`  
+
+```{r cTable}
+res_c <- res_table %>% select(Method, Benchmark, BestFitness) %>%
+  group_by(Method, Benchmark) %>%
+  summarise(average_ = mean(BestFitness),
+            std_dev = sd(BestFitness),
+            .groups = 'keep')  %>%
+  mutate(across(where(is.numeric), round, 3))
+
+res_ct <- kable(t(res_c), 
+      caption = paste('Performance between ', meth[1], ' and ', meth[2], ' methods, sumarised by objective functions, averaged across all runs'))
+```
+
+Comparing performance between the two types of algorithms we have average fitness of `r res_c$average_[1]` for `r meth[1]` when optimising for $f_1$ and an average fitness of `r res_c$average_[2]` when optimising for $f_2$.  For `r meth[2]` we have average fitness of `r res_c$average_[3]` when optimising for $f_1$ and average fitness of `r res_c$average_[4]` when optimising for $f_2$ .
+
+`r res_ct`
+
+#### `r meths[1]` - effect of dimensionality:  
+
+```{r q1dTable}
+res_d <- res_table %>% filter(Method == py$ec_names[1]) %>%
+  select(Benchmark, Dimensions, BestFitness) %>%
+  group_by(Benchmark, Dimensions) %>%
+  summarise(average_ = mean(BestFitness),
+            std_dev = sd(BestFitness),
+            .groups = 'keep')  %>%
+  mutate(across(where(is.numeric), round, 3))  
+res_dt <- kable(t(res_d),
+      caption = paste(meth[1], 'comparing the effect of dimensionality, average fitness across 30 runs'))
+```
+
+When looking at `r meths[1]` the results for $f1$ when $D=20$ give an average fitness of `r res_d$average_[1]` , compared to average fitness when $D=50$ of `r res_d$average_[2]` .  The results when optimising for $f2$ are an average fitness of `r res_d$average_[3]` when $D=20$ and average fitness of `r res_d$average_[4]`.  For both objective functions, fitness decreases as the number of dimensions increases, which seems reasonable considering the multimodal nature of the objective functions. 
+
+`r meth[1]` solutions evolve towards the optimal by shifting in relation to other randomly selected individuals, so as the number of dimensions increases, the variety within each individual increases.  For higher dimensionality, `r meth[1]` solutions should take either bigger populations (to increase chance of hitting a local optima) or increased generations (to increase the search time for identifying and moving towards local optima)
+
+`r res_dt`
+
+#### `r meth[1]` - effect of objective functions
+
+```{r q1eTable}
+res_e <- res_table %>% filter(Method == py$ec_names[1]) %>%
+  select(Dimensions, Benchmark, BestFitness) %>%
+  group_by(Dimensions, Benchmark) %>%
+  summarise(average_ = mean(BestFitness),
+            std_dev = sd(BestFitness),
+            .groups = 'keep')  %>%
+  mutate(across(where(is.numeric), round, 3))
+res_et <- kable(t(res_e),
+                caption = paste(meth[1], ' - comparing the effect of objective functions, averaged across 30 runs'))
+```
+
+The results for `r meths[1]` when $D=20$ and objective function is $f_1$ was average fitness of `r res_e$average_[1]` compared to average fitness of `r res_e$average_[2]` for function $f_2$.  When $D=50$ the average fitnesses were `r res_e$average_[3]` for $f_1$ and `r res_e$average_[4]` for $f_2$.
+
+The results show that the objective function has a massive effect on the performance of `r meth[1]` algorithm with massively improved performance against $f_2$ compared to $f_1$.  
+
+`r res_et`
+
+#### `r meths[2]` effect of dimensionality
+
+```{r q1fTable}
+res_f <- res_table %>% filter(Method == py$ec_names[2]) %>%
+  select(Dimensions, Benchmark, BestFitness) %>%
+  group_by(Benchmark, Dimensions) %>%
+  summarise(average_ = mean(BestFitness),
+            std_dev = sd(BestFitness),
+            .groups = 'keep')  %>%
+  mutate(across(where(is.numeric), round, 3))  
+res_ft <- kable(t(res_f),
+                caption = paste(meth[2], 'comparing the effect of dimensionality, average fitness across 30 runs'))
+```
+
+When looking at `r meths[2]` the results for $f1$ when $D=20$ give an average fitness of `r res_f$average_[1]` , compared to average fitness when $D=50$ of `r res_f$average_[2]` .  The results when optimising for $f2$ are an average fitness of `r res_f$average_[3]` when $D=20$ and average fitness of `r res_f$average_[4]`.
+
+An increase in dimensionality sees a decrease in fitness (i.e. an increase in the fitness value).  This indicates that dimensionality has a negative effect on the performance of `r meth[2]` functions.  Increased dimensionality brings increased diversity in the population, which is useful for exploration, but can make it difficult for an algorithm to drive towards local optima.  
+
+`r meths[2]` use both social intelligence and cognitive intelligence to shift toward an optimal solution, as the number of dimensions increases there should also be a commensurate increase in either population size or number of generations to offset the increased diversity (i.e. either increase 'ground coverage' or increase 'search time' for reaching local optima).
+
+`r res_ft`
+
+#### `r meths[2]` effect of objective functions  
+
+```{r q1gTable}
+res_g <- res_table %>% filter(Method == py$ec_names[2]) %>%
+  select(Dimensions, Benchmark, BestFitness) %>%
+  group_by(Dimensions, Benchmark, ) %>%
+  summarise(average_ = mean(BestFitness),
+            std_dev = sd(BestFitness),
+            .groups = 'keep')  %>%
+  mutate(across(where(is.numeric), round, 3))  
+res_gt <- kable(t(res_g),
+                caption = paste(meth[2], ' - comparing the effect of objective functions, averaged across 30 runs'))
+```
+
+The results for `r meths[1]` when $D=20$ and objective function is $f_1$ was average fitness of `r res_g$average_[1]` compared to average fitness of `r res_g$average_[2]` for function $f_2$.  When $D=50$ the average fitnesses were `r res_g$average_[3]` for $f_1$ and `r res_g$average_[4]` for $f_2$.
+
+The results show that the objective function has a massive effect on the performance of `r meth[2]` algorithm with massively improved performance against $f_2$ compared to $f_1$.  
+
+`r res_gt`
+
+```{r q1hTable}
+res_h <- res_table %>% 
+  select(Method, Dimensions, Benchmark, BestFitness) %>%
+  group_by(Dimensions, Benchmark, Method, ) %>%
+  summarise(average_ = mean(BestFitness),
+            std_dev = sd(BestFitness),
+            .groups = 'keep')  %>%
+  mutate(across(where(is.numeric), round, 3))  
+res_ht <- kable(t(res_h),
+                caption = paste('comparing methods by function and dimension'))
+```
+
+`r res_ht`
+
+Across the board, `r meths[1]` method appears to perform better than `r meths[2]` method.  That is at each dimension and across both functions, `r meth[1]` has better average fitness than `r meth[2]`.
+
+## Discussion  
+
+While there appears to be some effect of dimensionality, there seems to be a much stronger effect based on the objective function.  This is presumably down to the nature of the objective functions which are both complex, but are structurally quite different - where $f_1$ effectively sums differences between parent and chid, $f_2$ contains both sum and product functions over only the current solution.  
+
+
+
