@@ -1,0 +1,263 @@
+---
+title: "Q3_AIML426_project2"
+author: "Chad Kakau 300212228"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE, warning = FALSE}
+rm(list = ls())
+
+knitr::opts_chunk$set(include = FALSE, echo = TRUE, message = FALSE, warning = FALSE, results = TRUE)
+library(reticulate)
+library(dplyr)
+library(knitr)
+library(ggplot2)
+py_install('pandas')
+```
+
+```{python importCommonModules}
+#import all the modules used in this document
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import random
+import operator
+```
+
+```{python importScripts}
+# import the scripts used in this document
+import pbil
+```
+
+```{python preliminaryActions}
+# params
+MU = 95
+NGEN = 100
+# NDIM = 3
+# BENCH = 'f1'
+
+# create lists for iteration reference
+ec_methods = [pbil]
+f_paths = ['10_269', '23_10000', '100_995']
+dim_sizes = [10, 23, 100]
+ec_names = [meth.__name__ for meth in ec_methods]
+ec_nm = ['PBIL']
+```
+
+
+```{python createMultiRun}
+# function for multiple runs
+def multirun(ECM, ecm, paths, dims, runs):
+  multirun_results= pd.DataFrame(columns = ['Method', 'Dimensions', 'Run', 'HallOfFame'],)
+  
+  for e, meth in enumerate(ECM):
+    for p, path in enumerate(paths):
+      # for d, D in enumerate(dims):
+        for r in range(runs):
+          pop, logbook, hof, BIG = meth.main( MU = MU, NGEN = NGEN, NDIM = dims[p], PATH = path, SEED = e+r+p, )
+          best_fit = [item for (item) in hof[0].fitness.values]
+          multirun_results = multirun_results._append({'Method' : meth.__name__, 'method' : ec_nm[e], 'Knapsack': path, 'Dimensions': dims[p], 'Run': r, 'Population': pop, 'Logbook' : logbook, 'HallOfFame': hof, 'BestFitness':best_fit, 'BestInGen': BIG}, ignore_index=True)
+    
+  return(multirun_results)
+```
+
+
+```{python runExp}
+py_res = multirun(ECM = ec_methods, ecm = ec_nm, paths = f_paths, dims = dim_sizes, runs = 5)
+```
+
+```{python prepareResults}
+# retrieve Data from BestInGen
+py_res_melt = py_res.BestInGen.apply(pd.Series, dtype= 'd')
+py_res_melt = py_res.merge(py_res_melt, right_index = True, left_index = True)
+py_res_melt = py_res_melt.drop(['Population', 'Logbook', 'HallOfFame'], axis = 1)
+
+```
+
+
+
+```{r holdingNames}
+meths <- c('Population Based Incremental Learning')
+meth <- c('PBIL')
+paths_ <- py$f_paths
+```
+
+
+```{r q1ResultsTable, warning=FALSE}
+# retrieve fitnesses from Python and use R
+res_table <- py$py_res_melt
+
+ks_optim <- list('10_269' = 295, '23_10000'  = 9767, '100_995' = 1514)
+
+# filter results table and extract fitnesses
+rt <- res_table %>% 
+  select(-(c(Method, Dimensions))) %>%
+  tidyr::pivot_longer(cols =6:105, names_to = 'BestFits') %>%
+  mutate(optimal = ks_optim[Knapsack])%>%
+  tidyr::unnest_wider(c(value, optimal), names_sep = '_') 
+
+# generate averages for use in tables
+rt_t <- res_table %>% 
+  select(c(Run, Knapsack, BestFitness))%>%
+  mutate(optimal = ks_optim[Knapsack]) %>%
+  tidyr::unnest_wider(c(BestFitness, optimal), names_sep = '_') %>%
+  group_by(Knapsack, optimal_1) %>%
+  summarise(avg_val_run = mean(BestFitness_1),
+            accuracy_run = BestFitness_1/optimal_1,
+            avg_wt_run = mean(BestFitness_2),
+            sd_val_run = sd(BestFitness_1),
+            sd_wt_run = sd(BestFitness_2)) 
+  
+
+# generate averages for use in plot (convergence)  
+rt_p <- rt %>%  select(!Run) %>% 
+  group_by(Knapsack, BestFits) %>%  
+  summarise(avg_val_gen = mean(value_1),
+            accuracy = value_1/optimal_1,
+            sd_val_gen = sd(value_1), 
+            .groups = 'keep')
+```
+
+# Estimation of Distribution Algorithm (EDA)
+
+The Estimation of Distribution algorithm solves optimisation problems by tracking the statistics of the population of candidate solutions.  A population is created at each generation from the previous generation's population statistics.  EDA does not use recombination.
+
+## Method Description  
+
+I made slight modifications to deap example scripts to implement `r meths[1]` to optimise solutions for the 0-1 Knapsack problem where you must select items to carry in a knapsack that maximises the value $v_i$ and minimises the weight $w_i$ of the knapsack, with the added constraint that the Knapsack has a maximum weight limit $Q$ .  The formal problem description is:
+
+$$\max v_1x_1 + v_2x_2 + ... + v_Mx_M,$$
+$$s.t. w_1x_1 + w_2x_2 + ... + w_Mx_M \le Q,$$
+$$x_i \in \{0, 1\}, i = 1, ..., M,$$
+where $x_i=1$ indicates that item $i$ is included and $x_i=0$ indicates that item $i$ is excluded from the knapsack.  
+
+
+This section describes the approach: `r meths[1]` and the next section reports results for applying the `r meth[1]` to three different knapsack problems.
+
+### Experimental parameter settings
+
+The key parameters and operations used in this experiment are:  
+
+- $gen= 100$ - number of generations
+- $\mu = 100$ - population size
+- $dim \in [10, 23, 100]$ - number of dimensions determined by knapsack problem
+- $Q \in [269, 10000, 995]$ - max weight determined by knapsack problem
+- $N_{best} =1$ number of best individuals to establish population statistics for learning
+- $N_{worst}=1$ number of worst individuals to establish population statistics for unlearning
+- $\eta = 0.3$ - learning rate
+- $P(mut) = 0.1$ - probability that the probability vector will be mutated
+- $P(mut_{shift}) = 0.05$ probability that a bit will be mutated in the probability vector
+- $p_i = [0.05] * dim$ initial probability vector, also the probability that an item will be included in a knapsack when generating an individual (heavily biased towards empty knapsacks)
+
+The 0-1Knapsack problem is a fairly straightforward binary optimisation problem so I chose to run a few more generations and increase the population size compared to earlier experiments.  I did some testing with the learning rate, the probability of mutation $P(mut)$ and the probability of mutation shift $P(mut_{shift})$ before settling these values, which achieved reasonable performance.  Higher mutation rates led to poor performance with many generations of the 100 item knapsack having no valid individuals within the population of 100.
+
+
+### `r meths[1]`  
+
+In this implementation I used the `r meth[1]` method.  
+
+This method generates a population of size $\mu$ individuals, each with $dim =D$ , randomly generated boolean values, and an associated probability vector.  At each generation the population is updated by subjecting individuals to mutation that switches a given bit (from 0 to 1, or 1 to 0) with a given probability.  Individuals are evaluated by computing the sums of the values and weights of items included in the knapsack, and invalidating the knapsacks that exceed the maximum weight.   
+
+`r meth[1]` is a first order EDA and extends on the simple algorithmic framework that selects the $M$ best individuals in the population and generates a new population based on the population statisitcs $p$ of those $M$ best individuals. `r meth[1]` makes a bitwise association between each individual $x_i$ in the population,  with a vector of probabilities $p$ , both of length $D$ , so that each bit of $x_i$ shares a corresponding probability in $p$.  
+
+This implementation uses a generate/update process where the population of size $\mu$ is generated with individuals $x_i$ each containing $D$ boolean bits that indicate the inclusion or exclusion of items at position $k$ .  Individuals are also generated according to the probability vector $p$ .  During the update phase, the $M$ best individuals are selected and their probability vectors are (bitwise) updated with reference to the learning rate $\eta$ . Individual bits are randomly selected (in accordance with the value of $P(mut)$ ) for mutation, which involves adjusting randomly selected bits (in accordance with the value of $P(mut_{shift})$ ) of the probability vector (i.e. $px_i(k)$ )  .
+
+
+#### overall process:  
+
+- __set__ population of size= N individuals with $D$ bits
+- __set__ $N_{best}, N_{worst}$ number of individuals used to adjust $p$
+- __set__ $\eta \in (0, 1)$ learning rate
+- __Generate__ $D$ -length probability vector $p=[0.5, ..., 0.5]$
+- __while not termination__
+  - __Generate__ $N$ individuals $\{x_i\}$
+  - __For__ $i=1:N$ (each individual)
+    - __For__ $k=1:D$ (each bit)
+    - __If $(r\sim U[0, 1]) <p_k$ then $x_i(k) \leftarrow 1$
+    - __Else__ $x_i(k) \leftarrow 0$
+    - __End If__
+    - __Next__ $k$
+  - __Next__ $i$
+  - __Sort__ $f(x_1) \le f(x_2) \le ...  \le f(x_N)$
+  - __For__ $i=1:N_{best}$ (update probability vector)
+   - $p \leftarrow p + \eta(x_i-p)$ (learn probs of the best individuals)
+  - __Next__ $i$
+  - __For__ $i=(N-N_{worst}+1):N$
+   - $p \leftarrow p - \eta(x_i-p)$ (unlearn probs of the worst individuals)
+  - __Next__ $i$
+  - __If $(r\sim U[0, 1]) < P(mut)$ then __mutate__:
+    - $p_k \leftarrow p_k(1 - P(mut_{shift}))$
+    - $p_k \leftarrow p_k + (\text{rand.int}(0, 1)*P(mut_{shift}))$
+  - __Select__ $p \leftarrow \max(\min(p, p_{max}), p_{min})$
+- __Next generation__
+
+    
+
+## Results  
+
+I conducted five runs of the `r meth[1]` algorithm against each of the three knapsack problems.  Each run included 100 generations, with a population size of 100 individuals, and knapsack-specific max weights $Q \in \{269, 995, 10000\}$.  Results compare performance of the algorithm against each knapsack problem and include the convergence curves, mean, and standard deviation across the five runs.
+
+#### `r meths[1]` across all knapsacks
+
+```{r cTable}
+# make a table to show mean and standard deviation of five runs for each knapsack
+rt_kbl1 <- rt_t %>% 
+  group_by(Knapsack,optimal_1) %>%
+  summarise(average = mean(avg_val_run)) %>%
+  mutate(avg_best_accuracy = average/optimal_1) %>%
+  # select(!optimal_1) %>%
+  kable(caption = paste('Average best performance across the three knapsacks'))
+```
+
+`r rt_kbl1`
+
+Average performance for the three knapsacks are presented:  For knapsack '100_995' was the lowest at 86.0% accuracy. Knapsack '10_269' was next highest with accuracy of 99.1% and 99.8% accuracy was achieved for knapsack '23_10000'.  
+
+```{r plotResultsByGeneration, fig.cap='Plot of PBIL accuracy per generation, averaged across five runs', include=TRUE, echo=FALSE, fig.dim=c(6,3)}
+# plot best fitness by generation, for just the 100_995 knapsack
+rt_all = rt %>%  mutate(accuracy = value_1/optimal_1)
+
+all_knap <- ggplot(data = rt_all , aes(x = as.numeric(BestFits), y =accuracy)) +
+  geom_line(aes(col = Knapsack))+
+  labs(title = 'Average PBIL accuracy by Knapsack') +
+  xlab('generation number') +
+  ylab('accuracy')+
+  labs(colour = 'Knapsack')
+
+all_knap
+```
+
+The PBIL performed well against two of the knapsack problems ('10_269', '23_10000' knapsacks) but struggled to perform against the '100_995' knapsack.  The plot shows that the first two knapsacks quickly reached reasonably good performance (i.e. within the first 10 generations or so) an continued to perform well for the majority of generations.  The convergence is erratic potentially indicating overshooting between generational updates, or unhelpful mutations.  
+
+The plot shows worse performance for the '100_995' knapsack, with best perfomance per generation moving between 70-85%.  The lower performance could be due to the higher number of item combinations that would exceed the maximum weight, but I expected a more consistent increase movement towards convergence.  It's hard to tell, but because the plot is reflecting averages across five runs, the erratic accuracy scores could be caused by either the learning rate driving overshooting, or by the make up of different knapsacks at the same generation, across the five runs. 
+
+```{r plotBadKnapsack, include=TRUE, echo=FALSE, fig.cap= 'Plot of best accuracy by run for "100_995" knapsack', fig.dim= c(6, 3)}
+# plot best fitness by generation, for just the 100_995 knapsack
+rt_bad = rt %>% filter(Knapsack == '100_995') %>% mutate(accuracy = value_1/optimal_1)
+
+bad_knap <- ggplot(data = rt_bad , aes(x = as.numeric(BestFits), y =accuracy)) +
+  geom_line(aes(col = as.factor(as.numeric(Run)+1)))+
+  labs(title = 'Knapsack 100_995: Best accuracy per generation by run') +
+  xlab('generation number') +
+  ylab('accuracy')+
+  labs(colour = 'Run')
+
+bad_knap
+```
+
+The plot shows a fairly wide range of accuracy across the 5 runs and none of the individual runs increases smoothly, indicating that during the update cycle either the learning rate or the mutation rates are driving too much change that results in reduced fitness rather than increases.
+
+## Discussion  
+
+This was truly an ordeal.  Tweaking the individual rates to try and balance performance across all three knapsacks was a nightmare, and as with previous atttempts using other EC methods the majority of the focus here had to be on the trouble-some '100_995' knapsack which has lots of items and only requires a few to exceed the weight limit and become invalid.  
+
+The PBIL seemed ok, but as with other methods, it took a bit of playing with the underlying parameters (mainly biasing initial knapsacks towards emptiness, driven by the challenging '100_995' knapsack).  Although we knew everything about the problem, I tried to just focus on changing the parameters rather than set up a more specialised algorithm and objective function, so the model would be more generalisable.  It did mean that performance was not as good as achieved using other EC methods in the past, but there were some useful parameter settings and insights.
+
+In future I would try the following things:
+
+- increasing the size of $N_{best}$ and $N_{worst}$ to try and improve the population statistics and therefore generational updates.  In this implementation I set both to one individual, which should mean that the population statistics are always set towards _the_ best and away from the worst individuals, but there may be more value in increasing the sample of those statistics to encourage more stable growth (i.e. reduce the effect of a single high or low performing individual);  
+- reduce the learning rate to decrease the extent of changes in each update cycle, although I think this factor would be less important if the $N_{best}, N_{worst}$ samples were larger.  The plots show alot of erratic behaviour best performance between each generation and this was consistent over all runs for all knapsack sizes, so it would be interesting to do more testing with these parameters;  
+- I had high mutation rates and that led to poor performance for the '100_995' knapsack for all but the lowest mutation settings, so I think this is a parameter that I would look at, only for really fine-tuning after adjusting the other two parameters.  Mutation in a binary problem is fairly straight-forward (i.e. 1 or 0) but the implications for lots of mutation at once can be quite significant for the '100_995' knapsack problem.
+
+
